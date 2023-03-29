@@ -30,7 +30,6 @@
 // ......
 //
 
-use std::cmp::Ordering;
 use std::rc::Rc;
 use image::{ImageBuffer, Luma};
 use std::path::Path;
@@ -178,37 +177,29 @@ impl Canvas {
             .collect();
 
         // Creating interior cell dists
-        let mut in_cell_dists: Vec<(CellRef, Dist)> = Vec::new();
+        let mut in_cell_dists: Vec<(CellRef, f64)> = Vec::new();
 
         // Iterating over all interiors to compare with the outline
         for in_cell in interior.iter() {
             // Get all dists from in_cell with every outline
-            let dists: Vec<Dist> = outline
+            let dists: Vec<f64> = outline
                 .iter()
-                .map(|(out_cell, _)| Dist { start: Rc::clone(out_cell), end: Rc::clone(&in_cell) })
+                .map(|(out_cell, _)| out_cell.dist(Rc::clone(&in_cell)))
                 .collect();
 
-            let min_dist = dists.iter().min().unwrap();
 
-
-            // // Finding the min dist
-            // let mut min_dist = dists[0];
-            // for &dist in dists.iter() {
-            //     if dist < min_dist {
-            //         min_dist = dist;
-            //     }
-            // }
+            // Finding the min dist
+            let mut min_dist = dists[0];
+            for &dist in dists.iter() {
+                if dist < min_dist {
+                    min_dist = dist;
+                }
+            }
             // println!("{}", min_dist);
-
-            // Sorry rustaceans, but I have to use clone
-            in_cell_dists.push((Rc::clone(&in_cell), min_dist.clone()));
+            in_cell_dists.push((Rc::clone(&in_cell), min_dist));
         }
 
-        in_cell_dists.sort_by(|(_, dist_a), (_, dist_b)| dist_b.cmp(dist_a));
-
-        let (mut count, limit) = (0usize, 10000000usize);
-        while in_cell_dists.len() > 0 && count < limit {
-            let in_cell = &Rc::clone(&in_cell_dists[0].0);
+        while in_cell_dists.len() > 0 {
             println!("Interior Length: {}", in_cell_dists.len());
             // in_cell_dists = in_cell_dists
             //     .into_iter()
@@ -218,74 +209,41 @@ impl Canvas {
             // (best middle point)
             //
             // AAAA- please actually find the solution to this temp fix
-            // let mut farthest_in_cell = (Rc::new(Cell { x: 0, y: 0}), 0f64);
-            // for (in_cell, dist) in in_cell_dists.iter() {
-            //     if dist > &farthest_in_cell.1 {
-            //         farthest_in_cell = (Rc::clone(in_cell), *dist);
-            //     }
-            // }
+            let mut farthest_in_cell = (Rc::new(Cell { x: 0, y: 0}), 0f64);
+            for (in_cell, dist) in in_cell_dists.iter() {
+                if dist > &farthest_in_cell.1 {
+                    farthest_in_cell = (Rc::clone(in_cell), *dist);
+                }
+            }
 
-            // let (farthest_in_cell, min_dist) = farthest_in_cell;
+            let (farthest_in_cell, min_dist) = farthest_in_cell;
 
             // Get all dists from in_cell with every outline (again)
             // Optimization Idea: Don't do this...
-            let mut dists: Vec<(CellRef, Dist)> = outline
+            let dists: Vec<f64> = outline
                 .iter()
-                .map(|(out_cell, _)| (Rc::clone(out_cell), Dist{ start: Rc::clone(&in_cell), end: Rc::clone(out_cell) }))
+                .map(|(out_cell, _)| out_cell.dist(Rc::clone(&farthest_in_cell)))
                 .collect();
-
-            dists.sort_by(|(_, dist_a), (_, dist_b)| dist_a.cmp(dist_b));
 
             
             // Getting the outline cells that are the min dists or 1 away from min dist
-            // let mut closest_out_cells: Vec<CellRef> = Vec::new();
-            // for (&dist, (out_cell, available)) in dists.iter().zip(outline.iter()) {
-            //     // 45 45 right triangle has the least amount of difference between the legs and the
-            //     //    hypotonuse, therefor sqrt(2) is the least difference
-            //
-            //     if dist / 2f64.sqrt() <= min_dist && *available {
-            //         // println!("{}, {}", dist, min_dist);
-            //         closest_out_cells.push(Rc::clone(&out_cell));
-            //     }
-            // }
+            let mut closest_out_cells: Vec<CellRef> = Vec::new();
+            for (&dist, (out_cell, available)) in dists.iter().zip(outline.iter()) {
+                // 45 45 right triangle has the least amount of difference between the legs and the
+                //    hypotonuse, therefor sqrt(2) is the least difference
+                if dist / 2f64.sqrt() <= min_dist && *available {
+                    // println!("{}, {}", dist, min_dist);
+                    closest_out_cells.push(Rc::clone(&out_cell));
+                }
+            }
 
             // Getting a pair of outline cells that are somewhat the same slope
             //
             // You need to do this because i said so...
-            // let pair = self.filter_same_slope(Rc::clone(&farthest_in_cell), closest_out_cells);
-                // let pair = self.filter_same_slope(in_cell, vec![dists[1]]);
-            let pair = (&dists[0], &dists[1]);
-            let (legs_a, legs_b) = (pair.0.1.get_legs(), pair.1.1.get_legs());
-            if legs_a.0 as i32 - 1 <= legs_a.0 as i32 && legs_a.1 as i32 - 1 <= legs_b.1 as i32 {
-                let (out_cell_a, out_cell_b) = (&pair.0.0, &pair.1.0);
-
-                println!("Positions: ");
-                println!("{}, {}", out_cell_a.get_pos().0, out_cell_a.get_pos().1);
-                println!("{}, {}", out_cell_b.get_pos().0, out_cell_b.get_pos().1);
-
-                println!("Before length: {}", in_cell_dists.len());
-                self.erase_in_cells(&mut in_cell_dists, Rc::clone(in_cell), Rc::clone(&out_cell_a));
-                self.erase_in_cells(&mut in_cell_dists, Rc::clone(in_cell), Rc::clone(&out_cell_b));
-                println!("After length: {}", in_cell_dists.len());
-
-                skeleton.push(Rc::clone(&in_cell));
-                skeleton.push(Rc::clone(&out_cell_a));
-                skeleton.push(Rc::clone(&out_cell_b));
-            }
-
-            // Find and remove element to not be reused
-            if let Some(index) = in_cell_dists.iter().position(|(cell, _)| *cell == Rc::clone(in_cell)) {
-                // Remove interior and in_cell_dists because in_ceLl_dists is being accessed
-                // inside this loop
-                // interior.remove(index);
-                in_cell_dists.remove(index);
-            }
-
-            println!("Iteration Done.");
-            count += 1;
+            let pair = self.filter_same_slope(Rc::clone(&farthest_in_cell), closest_out_cells);
             // Consuming the availablity on the outline cells so we cant reuse them
             // Inefficent but solving it the right way takes time that i don't have
-            // if let Some((out_cell_a, out_cell_b)) = &pair {
+            if let Some((out_cell_a, out_cell_b)) = &pair {
                 // for (cell, available) in outline.iter_mut() {
                 //     if cell == out_cell_a || cell == out_cell_b {
                 //         // *available = false;
@@ -293,19 +251,19 @@ impl Canvas {
                 // }
 
 
-                // println!("Positions: ");
-                // println!("{}, {}", out_cell_a.get_pos().0, out_cell_a.get_pos().1);
-                // println!("{}, {}", out_cell_b.get_pos().0, out_cell_b.get_pos().1);
-                //
-                // println!("Before length: {}", in_cell_dists.len());
-                // self.erase_in_cells(&mut in_cell_dists, Rc::clone(&in_cell), Rc::clone(out_cell_a));
-                // self.erase_in_cells(&mut in_cell_dists, Rc::clone(&in_cell), Rc::clone(out_cell_b));
-                // println!("After length: {}", in_cell_dists.len());
-                //
-                // skeleton.push(Rc::clone(&in_cell));
-                // skeleton.push(Rc::clone(&out_cell_a));
-                // skeleton.push(Rc::clone(&out_cell_b));
-                //
+                println!("Positions: ");
+                println!("{}, {}", out_cell_a.get_pos().0, out_cell_a.get_pos().1);
+                println!("{}, {}", out_cell_b.get_pos().0, out_cell_b.get_pos().1);
+
+                println!("Before length: {}", in_cell_dists.len());
+                self.erase_in_cells(&mut in_cell_dists, Rc::clone(&farthest_in_cell), Rc::clone(out_cell_a));
+                self.erase_in_cells(&mut in_cell_dists, Rc::clone(&farthest_in_cell), Rc::clone(out_cell_b));
+                println!("After length: {}", in_cell_dists.len());
+
+                skeleton.push(Rc::clone(&farthest_in_cell));
+                skeleton.push(Rc::clone(&out_cell_a));
+                skeleton.push(Rc::clone(&out_cell_b));
+
                 // Find and remove element to not be reused
                 // if let Some(index) = interior.iter().position(|in_cell| in_cell == &farthest_in_cell) {
                 //     skeleton.push(farthest_in_cell);
@@ -313,58 +271,67 @@ impl Canvas {
                     // in_cell_dists.remove(index);
                     // continue;
                 // }
-            // }
+            }
 
+            // Find and remove element to not be reused
+            if let Some(index) = in_cell_dists.iter().position(|(cell, _)| *cell == farthest_in_cell) {
+                // Remove interior and in_cell_dists because in_ceLl_dists is being accessed
+                // inside this loop
+                // interior.remove(index);
+                in_cell_dists.remove(index);
+            }
+
+            println!("Iteration Done.");
+            break;
         }
 
-        for i in &skeleton {
-            println!("{}, {}", i.get_pos().0, i.get_pos().1);
+        for i in skeleton {
+            println!("{}, {}", i.get_pos().0, i.get_pos().0);
         }
 
         self.skeleton = skeleton;
     }
 
-    // pub fn filter_same_slope(&self, cell: CellRef, compare_cells: Vec<CellRef, Dist>) -> Option<(CellRef, CellRef)> {
-    //     if 
-        // for compare_cell_a in &compare_cells {
-        //     for compare_cell_b in &compare_cells {
-        //         if compare_cell_a == compare_cell_b { continue }
-        //         // println!("Cell A: {}, {}", compare_cell_a.x, compare_cell_a.y);
-        //         // println!("Cell B: {}, {}", compare_cell_b.x, compare_cell_b.y);
-        //
-        //         let x_len_b = (compare_cell_b.x - cell.x).abs();
-        //         let y_len_b = (compare_cell_b.y - cell.y).abs();
-        //
-        //         for x_offset in 0..1 {
-        //             for y_offset in 0..1 {
-        //                 let x_len_a = (compare_cell_a.x - cell.x + x_offset).abs();
-        //                 let y_len_a = (compare_cell_a.y - cell.y + y_offset).abs();
-        //
-        //                 // println!("Offset: {}, {}", x_offset, y_offset);
-        //                 // println!("X Lengths: {}, {}", x_len_a, x_len_b);
-        //                 // println!("Y Lengths: {}, {}", y_len_a, y_len_b);
-        //                 if x_len_a == 0 && x_len_b == 0 {
-        //                     return Some((Rc::clone(compare_cell_a), Rc::clone(compare_cell_b)));
-        //                 } else if x_len_a == 0 || x_len_b == 0 { continue }
-        //
-        //                 // 1st grade math :p
-        //                 let slope_a = y_len_a as f64 / x_len_a as f64;
-        //                 let slope_b = y_len_b as f64 / x_len_b as f64;
-        //
-        //                 if slope_a == slope_b {
-        //                     // println!("{} == {}", slope_a, slope_b);
-        //                     return Some((Rc::clone(compare_cell_a), Rc::clone(compare_cell_b)));
-        //                 }
-        //             }
-        //         }
-        //     }
-        // }
-        // None
-    // }
+    pub fn filter_same_slope(&self, cell: CellRef, compare_cells: Vec<CellRef>) -> Option<(CellRef, CellRef)> {
+        for compare_cell_a in &compare_cells {
+            for compare_cell_b in &compare_cells {
+                if compare_cell_a == compare_cell_b { continue }
+                // println!("Cell A: {}, {}", compare_cell_a.x, compare_cell_a.y);
+                // println!("Cell B: {}, {}", compare_cell_b.x, compare_cell_b.y);
+
+                let x_len_b = (compare_cell_b.x - cell.x).abs();
+                let y_len_b = (compare_cell_b.y - cell.y).abs();
+
+                for x_offset in 0..1 {
+                    for y_offset in 0..1 {
+                        let x_len_a = (compare_cell_a.x - cell.x + x_offset).abs();
+                        let y_len_a = (compare_cell_a.y - cell.y + y_offset).abs();
+
+                        // println!("Offset: {}, {}", x_offset, y_offset);
+                        // println!("X Lengths: {}, {}", x_len_a, x_len_b);
+                        // println!("Y Lengths: {}, {}", y_len_a, y_len_b);
+                        if x_len_a == 0 && x_len_b == 0 {
+                            return Some((Rc::clone(compare_cell_a), Rc::clone(compare_cell_b)));
+                        } else if x_len_a == 0 || x_len_b == 0 { continue }
+
+                        // 1st grade math :p
+                        let slope_a = y_len_a as f64 / x_len_a as f64;
+                        let slope_b = y_len_b as f64 / x_len_b as f64;
+
+                        if slope_a == slope_b {
+                            // println!("{} == {}", slope_a, slope_b);
+                            return Some((Rc::clone(compare_cell_a), Rc::clone(compare_cell_b)));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
 
 
     // Brensenham's Line algorithm
-    fn erase_in_cells(&mut self, in_cell_dists: &mut Vec<(CellRef, Dist)>, c1: CellRef, c2: CellRef) {
+    fn erase_in_cells(&self, in_cell_dists: &mut Vec<(CellRef, f64)>, c1: CellRef, c2: CellRef) {
         let mut remove_in_cell = |x, y| {
             // Biggest hault
             let half_thickness = (1.0 / 2.0) as isize;
@@ -372,7 +339,6 @@ impl Canvas {
                 for dy in -half_thickness..=half_thickness {
                     if dx * dx + dy * dy <= half_thickness * half_thickness {
                         if let Some(index) = in_cell_dists.iter().position(|(cell, _)| cell.get_pos() == (x + dx as i32, y + dy as i32)) {
-                            // self.skeleton.push(Rc::clone(&in_cell_dists[index].0));
                             in_cell_dists.remove(index);
                         }
                     }
@@ -429,47 +395,6 @@ impl Canvas {
         self.grid.print_vertices(&self.skeleton);
     }
 }
-
-#[derive(Eq, Clone)]
-pub struct Dist {
-    start: CellRef,
-    end: CellRef,
-}
-
-impl Dist {
-    pub fn get_legs(&self) -> (u32, u32) {
-        let x_leg = (self.start.x - self.end.x).abs();
-        let y_leg = (self.start.y - self.end.y).abs();
-        (x_leg as u32, y_leg as u32)
-    }
-    pub fn get_mag(&self) -> f64 {
-        let (x_leg, y_leg) = self.get_legs();
-        ((x_leg.pow(2) + y_leg.pow(2)) as f64).sqrt()
-    }
-}
-
-impl Ord for Dist {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // self.get_mag().cmp(&other.get_mag())
-        let (a, b) = (self.get_mag(), other.get_mag());
-        if a > b { Ordering::Greater }
-        else if a < b { Ordering::Less }
-        else { Ordering::Equal }
-    }
-}
-
-impl PartialOrd for Dist {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl PartialEq for Dist {
-    fn eq(&self, other: &Self) -> bool {
-        self.get_mag() == other.get_mag()
-    }
-}
-
 
 pub struct Grid {
     dim: (u32, u32),
