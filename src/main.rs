@@ -52,7 +52,9 @@ fn main() {
     //
     // ";
 
+    // For connecting points, find the shortest path that is farthest from all outer cells
+
     let mut canvas = Canvas::new();
-    canvas.build_from_img("input.png");
+    canvas.build_from_img("G.png");
     canvas.save();
 }
