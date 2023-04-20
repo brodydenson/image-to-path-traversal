@@ -33,6 +33,7 @@
 use std::fmt;
 use std::cmp::Ordering;
 use std::rc::Rc;
+// use std::cell::RefCell;
 use image::{ImageBuffer, Luma};
 use std::path::Path;
 type CellRef = Rc<Cell>;
@@ -40,13 +41,12 @@ type CellRef = Rc<Cell>;
 pub struct Canvas {
     grid: Grid,
     outline: Vec<CellRef>,
-    skeleton: Vec<CellRef>,
+    skeleton: Grid,
 }
-
 
 impl Canvas {
     pub fn new() -> Canvas {
-        Canvas { grid: Grid::new(), outline: Vec::new(), skeleton: Vec::new() }
+        Canvas { grid: Grid::new(), outline: Vec::new(), skeleton: Grid::new() }
     }
 
     pub fn build_from_img(&mut self, str_src_path: &str) {
@@ -100,7 +100,7 @@ impl Canvas {
         for (x, y, pixel) in new_img.enumerate_pixels_mut() {
             let in_outline = self.outline
                 .iter()
-                .find(|cell| cell.x == x as i32 && cell.y == y as i32);
+                .find(|cell| cell.x == x && cell.y == y);
             *pixel = match in_outline {
                 Some(_) => Luma([0]),
                 _ => Luma([255]),
@@ -115,18 +115,14 @@ impl Canvas {
         let mut new_img = ImageBuffer::<Luma<u8>, Vec<u8>>::new(width, height);
 
         for (x, y, pixel) in new_img.enumerate_pixels_mut() {
-            let in_skeleton = self.skeleton
-                .iter()
-                .position(|cell| cell.x == x as i32 && cell.y == y as i32);
-            let in_outline = self.outline
-                .iter()
-                .find(|cell| cell.x == x as i32 && cell.y == y as i32);
+            
+            let in_skeleton = self.skeleton.at(x, y);
+            // let in_outline = self.outline
+            //     .iter()
+            //     .find(|cell| cell.x == x as i32 && cell.y == y as i32);
             *pixel = match in_skeleton {
-                Some(i) => Luma([(194f64 * (i as f64 / self.skeleton.len() as f64)) as u8]),
-                _ => match in_outline {
-                    Some(_) => Luma([128]),
-                    _ => Luma([225]),
-                },
+                Some(_) => Luma([0]),       
+                _ => Luma([225]),
             }
         }
 
@@ -136,250 +132,390 @@ impl Canvas {
     }
 
     fn build_outline(&mut self) {
-        self.outline = self.grid.select(|cell| self.grid.get_adjacent(&cell).len() < 4);
+        self.outline = self.grid.select(|cell| self.grid.get_adjacent_cross(&cell).len() < 4);
     }
 
     fn build_skeleton(&mut self) {
-        let mut skeleton: Vec<CellRef> = Vec::new();
+        // let mut skeleton = self.grid.select(|_| true);
+        self.skeleton = self.grid.clone();
 
-        // Gotta silence the compiler somehow
-        let outline = self.outline.clone();
-        let interior = self.grid.select(|cell| !outline.contains(&Rc::clone(cell)));
-        // let interior: Vec<CellRef> = taken_cells
-        //     .into_iter()
-        //     .filter(|cell| !outline.contains(&Rc::clone(cell)))
-        //     .collect();
-
-        // Creating interior cell dists
-        let mut in_cell_dists: Vec<(CellRef, Dist)> = Vec::new();
-
-        // Iterating over all interiors to compare with the outline
-        for in_cell in interior.iter() {
-            // Get all dists from in_cell with every outline
-            let dists: Vec<Dist> = outline
-                .iter()
-                .map(|out_cell| Dist { start: Rc::clone(&in_cell), end: Rc::clone(out_cell) })
-                .collect();
-
-            let min_dist = dists.iter().min().unwrap();
-
-            // Sorry rustaceans, but I have to use clone
-            in_cell_dists.push((Rc::clone(&in_cell), min_dist.clone()));
+        // let mut prev_len = 0;
+        // let mut i = 0;
+        let mut prev_remove_count = 0;
+        let mut curr_remove_count = self.thin();
+        while curr_remove_count != prev_remove_count {
+            prev_remove_count = curr_remove_count;
+            curr_remove_count = self.thin();
+            println!("Remove Count: {}", curr_remove_count);
+            println!("Skeleton Length: {}", self.skeleton.select(|_| true).len());
+            continue;
         }
 
-        in_cell_dists.sort_by(|(_, dist_a), (_, dist_b)| dist_b.cmp(dist_a));
 
-        let (mut count, limit) = (0usize, 600000usize);
-        while in_cell_dists.len() > 0 && count < limit {
-            // if count == 590 {
-            //     skeleton = vec![];
-            // }
-            let in_cell = &Rc::clone(&in_cell_dists[0].0);
-            // println!("Interior Length: {}", in_cell_dists.len());
-
-            // Get all dists from in_cell with every outline (again)
-            // Optimization Idea: Don't do this...
-            let mut dists: Vec<(CellRef, Dist)> = outline
-                .iter()
-                .map(|out_cell| (Rc::clone(out_cell), Dist{ start: Rc::clone(&in_cell), end: Rc::clone(out_cell) }))
-                .collect();
-
-            dists.sort_by(|(_, dist_a), (_, dist_b)| dist_a.cmp(dist_b));
-            
-            let find_sorrounding = |out_cell_a: &CellRef, out_dist_a: &Dist, targets: Vec<(i32, i32)>| {
-                for (target_x, target_y) in targets {
-                    let result = dists.iter().find(|(out_cell, _)| out_cell.get_pos() == (target_x, target_y));
-
-                    if let Some((out_cell_b, out_dist_b)) = result {
-                        let hypotenuse = Dist { start: Rc::clone(out_cell_a), end: Rc::clone(out_cell_b) };
-
-                        // Making sure that the two outline points aren't right next to each other
-                        if hypotenuse.get_mag() >= out_dist_a.get_mag() && hypotenuse.get_mag() >= out_dist_b.get_mag() {
-                            return result;
-                        }
-                    }
-                }
-                None
-            };
-
-            let (min_out_cell_a, min_out_dist_a) = &dists[0];
-            let (x_dist, y_dist) = min_out_dist_a.get_dists();
-            'outer: for x_offset in -1..2 {
-                for y_offset in -1..2 {
-                    let targets = vec![
-                        (in_cell.get_pos().0 + (x_dist + x_offset), in_cell.get_pos().1 + (y_dist + y_offset)),
-                        // (in_cell.get_pos().0 + (-x_dist + x_offset), in_cell.get_pos().1 + (y_dist + y_offset)),
-                        // (in_cell.get_pos().0 + (x_dist + x_offset), in_cell.get_pos().1 + (-y_dist + y_offset)),
-                    ];
-
-                    let result = find_sorrounding(min_out_cell_a, min_out_dist_a, targets);
-
-                    if let Some((min_out_cell_b, min_out_dist_b)) = result {
-                        println!("Cell A: {}, Cell B (target): {}", min_out_cell_a, min_out_cell_b);
-
-
-                        // println!("Before length: {}", in_cell_dists.len());
-                        self.erase_in_cells(&mut in_cell_dists, Rc::clone(in_cell), Rc::clone(&min_out_cell_a));
-                        self.erase_in_cells(&mut in_cell_dists, Rc::clone(in_cell), Rc::clone(&min_out_cell_b));
-                        // println!("After length: {}", in_cell_dists.len());
-
-                        skeleton.push(Rc::clone(&in_cell));
-                        skeleton.push(Rc::clone(&min_out_cell_a));
-                        skeleton.push(Rc::clone(&min_out_cell_b));
-                        break 'outer;
-                    }
-                }
-            }
-            
-
-            // let min_leg_sum = &dists[0].1.get_legs().0 + &dists[0].1.get_legs().1;
-            //
-            //
-            // println!("\nNew sum: {}", min_leg_sum);
-            // while dists.len() >= 2 {
-            //     let pair = (&dists[0], &dists[1]);
-            //     let (legs_a, legs_b) = (pair.0.1.get_legs(), pair.1.1.get_legs());
-            //     let (out_cell_a, out_cell_b) = (&pair.0.0, &pair.1.0);
-            //_b
-            //     println!("Positions: ");
-            //     println!("{}, {}", out_cell_a.get_pos().0, out_cell_a.get_pos().1);
-            //     println!("{}, {}", out_cell_b.get_pos().0, out_cell_b.get_pos().1);
-            //
-            //     // if legs_a.0 as i32 - 1 > legs_a.0 as i32 && legs_a.1 as i32 - 1 > legs_b.1 as i32 {
-            //     //     break;
-            //     // }
-            //
-            //     // Letting room for a 1px margin of error
-            //     if (legs_a.0 + legs_a.1) as i32 - 2 > min_leg_sum as i32 || (legs_b.0 + legs_b.1) as i32 - 2 > min_leg_sum as i32 {
-            //         // println!("{}: ({}, {}), ({}, {})", min_leg_sum, legs_a.0, legs_a.1, legs_b.0, legs_b.1);
-            //         println!("Too far");
-            //         dists.remove(1);
-            //         continue;
-            //     }
-            //
-            //     if !pair.0.1.cmp_slope(&pair.1.1) {
-            //         println!("Different slope");
-            //         // dists.remove(0);
-            //         dists.remove(1);
-            //         continue;
-            //     }
-            //
-            //     let hypotenuse = Dist { start: Rc::clone(out_cell_a), end: Rc::clone(out_cell_b) };
-            //
-            //     // Making sure that the two outline points aren't right next to each other
-            //     if hypotenuse.get_mag() < pair.0.1.get_mag() || hypotenuse.get_mag() < pair.1.1.get_mag() {
-            //         println!("Too close");
-            //         dists.remove(1);
-            //         // dists.remove(0);
-            //         continue;
-            //     }
-            //
-            //     println!("Passed");
-            //
-            //
-            //     // println!("Before length: {}", in_cell_dists.len());
-            //     self.erase_in_cells(&mut in_cell_dists, Rc::clone(in_cell), Rc::clone(&out_cell_a));
-            //     self.erase_in_cells(&mut in_cell_dists, Rc::clone(in_cell), Rc::clone(&out_cell_b));
-            //     // println!("After length: {}", in_cell_dists.len());
-            //
-            //     skeleton.push(Rc::clone(&in_cell));
-            //     skeleton.push(Rc::clone(&out_cell_a));
-            //     skeleton.push(Rc::clone(&out_cell_b));
-            //     break;
-            // }
-
-
-            // Find and remove element to not be reused
-            if let Some(index) = in_cell_dists.iter().position(|(cell, _)| *cell == Rc::clone(in_cell)) {
-                // Remove interior and in_cell_dists because in_ceLl_dists is being accessed
-                // inside this loop
-                // interior.remove(index);
-                in_cell_dists.remove(index);
-            }
-
-            // in_cell_dists.remove(0);
-
-            // println!("Iteration Done.");
-            count += 1;
-        }
-
-        // for i in &skeleton {
-        //     println!("{}, {}", i.get_pos().0, i.get_pos().1);
-        // }
-
-        self.skeleton = skeleton;
+        // self.remove_hit_and_miss_transform(&mut skeleton);
+        // self.skeleton = skeleton;
     }
 
-    fn connect_corners(&mut self, skeleton: &mut Vec<CellRef>) {
+    // Thinning: https://homepages.inf.ed.ac.uk/rbf/HIPR2/thin.htm
+    // Hit-and-Miss Transform: https://homepages.inf.ed.ac.uk/rbf/HIPR2/hitmiss.htm
+    fn thin(&mut self) -> u32 {
+        let test_1 = |grid: &Grid, cell: CellRef| -> bool {
+            // (0) The pixel is black and has eight neighbours
+            // (1) 2 <= B(P1) <= 6 
+            // (2) A(P1) = 1
+            // (3) At least one of P2 and P4 and P6 is white
+            // (4) At least one of P4 and P6 and P8 is white
+            let (x, y) = cell.get_pos();
+            // println!("Passed 0");
+            if !(x + 1 < grid.dim.0 && y + 1 < grid.dim.1 && x as i32 - 1 >= 0 && y as i32 - 1 >= 0) { return false }
+            // println!("Passed 1");
+            let taken_adjacent_n = grid.get_adjacent(&cell).iter().filter(|cell| cell.is_some()).count();
+            if !(2 <= taken_adjacent_n && taken_adjacent_n <= 6) { return false }
+            // println!("Passed 2");
+            if !(grid.get_transitions(&cell) == 1) { return false }
+            // println!("Passed 3");
+            if !(grid.at(x, y + 1).is_none() ||
+                grid.at(x + 1, y).is_none() ||
+                grid.at(x, y - 1).is_none()) { return false }
+            // println!("Passed 4");
+            if !(grid.at(x + 1, y).is_none() ||
+                grid.at(x, y - 1).is_none() ||
+                grid.at(x - 1, y).is_none()) { return false }
+            // println!("Passed All");
 
-    }
+            true
+        };
+        let test_2 = |grid: &Grid, cell: CellRef| -> bool {
+            // (0) The pixel is black and has eight neighbours
+            // (1) 2 <= B(P1) <= 6 
+            // (2) A(P1) = 1
+            // (3) At least one of P2 and P4 and P8 is white
+            // (4) At least one of P2 and P6 and P8 is white
+            let (x, y) = cell.get_pos();
+            // println!("Passed 0");
+            if !(x + 1 < grid.dim.0 && y + 1 < grid.dim.1 && x as i32 - 1 >= 0 && y as i32 - 1 >= 0) { return false }
+            // println!("Passed 1");
+            let taken_adjacent_n = grid.get_adjacent(&cell).iter().filter(|cell| cell.is_some()).count();
+            if !(2 <= taken_adjacent_n && taken_adjacent_n <= 6) { return false }
+            // println!("Passed 2");
+            if !(grid.get_transitions(&cell) == 1) { return false }
+            // println!("Passed 3");
+            if !(grid.at(x, y + 1).is_none() ||
+                grid.at(x + 1, y).is_none() ||
+                grid.at(x - 1, y).is_none()) { return false }
+            // println!("Passed 4");
+            if !(grid.at(x, y + 1).is_none() ||
+                grid.at(x, y - 1).is_none() ||
+                grid.at(x - 1, y).is_none()) { return false }
+            // println!("Passed All");
 
-
-    // Brensenham's Line algorithm
-    fn erase_in_cells(&mut self, in_cell_dists: &mut Vec<(CellRef, Dist)>, c1: CellRef, c2: CellRef) {
-        let mut remove_in_cell = |x, y| {
-            // Biggest hault
-            let half_thickness = (1.0 / 2.0) as isize;
-            for dx in -half_thickness..=half_thickness {
-                for dy in -half_thickness..=half_thickness {
-                    if dx * dx + dy * dy <= half_thickness * half_thickness {
-                        if let Some(index) = in_cell_dists.iter().position(|(cell, _)| cell.get_pos() == (x + dx as i32, y + dy as i32)) {
-                            // self.skeleton.push(Rc::clone(&in_cell_dists[index].0));
-                            in_cell_dists.remove(index);
-                        }
-                    }
-                }
-            }
+            true
         };
 
-        let (x1, y1) = c1.get_pos();
-        let (x2, y2) = c2.get_pos();
+        let mut remove_count = 0;
 
-        let dx = (x2 - x1).abs();
-        let dy = (y2 - y1).abs();
-        let (mut x, mut y) = (x1, y1);
-        let sx = if x1 < x2 { 1 } else { -1 };
-        let sy = if y1 < y2 { 1 } else { -1 };
-
-        if dx > dy {
-            let mut err = dx / 2;
-            while x != x2 {
-                remove_in_cell(x, y);
-                err -= dy;
-                if err < 0 {
-                    y += sy;
-                    err += dx;
-                }
-                x += sx;
-            }
-        } else {
-            let mut err = dy / 2;
-            while y != y2 {
-                remove_in_cell(x, y);
-                // points.push((x, y));
-                err -= dx;
-                if err < 0 {
-                    x += sx;
-                    err += dy;
-                }
-                y += sy;
-            }
+        let viewed_grid = self.skeleton.clone();
+        let selected = self.skeleton.select(|cell: &CellRef| test_1(&viewed_grid, Rc::clone(&cell)));
+        for cell in selected {
+            self.skeleton.set_cell(cell.x, cell.y, false);
+            remove_count += 1;
         }
 
-        remove_in_cell(x, y);
+        let viewed_grid = self.skeleton.clone();
+        let selected = self.skeleton.select(|cell: &CellRef| test_2(&viewed_grid, Rc::clone(&cell)));
+        for cell in selected {
+            self.skeleton.set_cell(cell.x, cell.y, false);
+            remove_count += 1;
+        }
+
+        remove_count
     }
+    //     let valid_combinations = [
+    //         // ooo
+    //         // -x-
+    //         // xxx
+    //         //
+    //         // -oo
+    //         // xxo
+    //         // xx-
+    //         [
+    //             None,        Some(true),  Some(true),
+    //             Some(false), Some(true),  Some(true),
+    //             Some(false), Some(false), None,
+    //         ],
+    //         [
+    //             Some(true),  Some(true),  None,
+    //             Some(true),  Some(true),  Some(false),
+    //             None,        Some(false), Some(false),
+    //         ],
+    //         [
+    //             None,        Some(false), Some(false),
+    //             Some(true),  Some(true),  Some(false),
+    //             Some(true),  Some(true),  None,
+    //         ],
+    //         [
+    //             Some(false), Some(false), None,
+    //             Some(false), Some(true),  Some(true),
+    //             None,        Some(true),  Some(true),
+    //         ],
+    //         // ---------------------------------------
+    //         [
+    //             Some(false), Some(false), Some(false),
+    //             None,        Some(true),  None,
+    //             Some(true),  Some(true),  Some(true),
+    //         ],
+    //         [
+    //             Some(false), None,        Some(true),
+    //             Some(false), Some(true),  Some(true),
+    //             Some(false), None,        Some(true),
+    //         ],
+    //         [
+    //             Some(true),  Some(true),  Some(true),
+    //             None,        Some(true),  None,
+    //             Some(false), Some(false), Some(false),
+    //         ],
+    //         [
+    //             Some(false), None,        Some(true),
+    //             Some(false), Some(true),  Some(true),
+    //             Some(false), None,        Some(true),
+    //         ],
+    //         // ---------------------------------------
+    //         // [
+    //         //     Some(false), None,        None,
+    //         //     Some(false), Some(true),  Some(false),
+    //         //     Some(false), Some(false), Some(false),
+    //         // ],
+    //         // [
+    //         //     None,        Some(false), Some(false),
+    //         //     None,        Some(true),  Some(false),
+    //         //     Some(false), Some(false), Some(false),
+    //         // ],
+    //         // [
+    //         //     Some(false), Some(false), Some(false),
+    //         //     Some(false), Some(true),  Some(false),
+    //         //     Some(false), None,        None,
+    //         // ],
+    //         // [
+    //         //     Some(false), Some(false), Some(false),
+    //         //     None,        Some(true),  Some(false),
+    //         //     None,        Some(false), Some(false),
+    //         // ],
+    //     ];
+    //
+    //     let saved_skeleton = self.skeleton.clone();
+    //     // Hit-and-Miss Transform
+    //     let is_valid = |cell: &CellRef| -> bool {
+    //         // println!("{}", saved_skeleton.select(|_| true).len());
+    //         let adjacent = saved_skeleton.get_adjacent(cell);
+    //         // let adjacent: Vec<Option<i32>> = vec![None, None, Some(0), Some(0), Some(0), None, None, None, None];
+    //
+    //         valid_combinations.iter().find(|combo| {
+    //             for (cell_i, combo_i) in adjacent.iter().zip(combo.iter()) {
+    //                 if let Some(taken) = combo_i {
+    //                     if cell_i.is_some() != *taken { return false }
+    //                 }
+    //             }
+    //
+    //             true
+    //         }).is_some()
+    //     };
+    //
+    //     let mut removed_count = 0;
+    //     for cell in self.skeleton.select(|cell| is_valid(&cell)) {
+    //         removed_count += 1;
+    //         self.skeleton.set_cell(cell.x as u32, cell.y as u32, false);
+    //     }
+    //     removed_count
+    // }
+
+
+
+
+
+
+    // fn build_skeleton(&mut self) {
+    //     let mut skeleton: Vec<CellRef> = Vec::new();
+    //
+    //     // Gotta silence the compiler somehow
+    //     let outline = self.outline.clone();
+    //     let interior = self.grid.select(|cell| !outline.contains(&Rc::clone(cell)));
+    //     // let interior: Vec<CellRef> = taken_cells
+    //     //     .into_iter()
+    //     //     .filter(|cell| !outline.contains(&Rc::clone(cell)))
+    //     //     .collect();
+    //
+    //     // Creating interior cell dists
+    //     let mut in_cell_dists: Vec<(CellRef, Dist)> = Vec::new();
+    //
+    //     // Iterating over all interiors to compare with the outline
+    //     for in_cell in interior.iter() {
+    //         // Get all dists from in_cell with every outline
+    //         let dists: Vec<Dist> = outline
+    //             .iter()
+    //             .map(|out_cell| Dist { start: Rc::clone(&in_cell), end: Rc::clone(out_cell) })
+    //             .collect();
+    //
+    //         let min_dist = dists.iter().min().unwrap();
+    //
+    //         // Sorry rustaceans, but I have to use clone
+    //         in_cell_dists.push((Rc::clone(&in_cell), min_dist.clone()));
+    //     }
+    //
+    //     in_cell_dists.sort_by(|(_, dist_a), (_, dist_b)| dist_b.cmp(dist_a));
+    //
+    //     let (mut count, limit) = (0usize, 600000usize);
+    //     while in_cell_dists.len() > 0 && count < limit {
+    //         // if count == 590 {
+    //         //     skeleton = vec![];
+    //         // }
+    //         let in_cell = &Rc::clone(&in_cell_dists[0].0);
+    //         // println!("Interior Length: {}", in_cell_dists.len());
+    //
+    //         // Get all dists from in_cell with every outline (again)
+    //         // Optimization Idea: Don't do this...
+    //         let mut dists: Vec<(CellRef, Dist)> = outline
+    //             .iter()
+    //             .map(|out_cell| (Rc::clone(out_cell), Dist{ start: Rc::clone(&in_cell), end: Rc::clone(out_cell) }))
+    //             .collect();
+    //
+    //         dists.sort_by(|(_, dist_a), (_, dist_b)| dist_a.cmp(dist_b));
+    //         
+    //         let find_sorrounding = |out_cell_a: &CellRef, out_dist_a: &Dist, targets: Vec<(i32, i32)>| {
+    //             for (target_x, target_y) in targets {
+    //                 let result = dists.iter().find(|(out_cell, _)| out_cell.get_pos() == (target_x, target_y));
+    //
+    //                 if let Some((out_cell_b, out_dist_b)) = result {
+    //                     let hypotenuse = Dist { start: Rc::clone(out_cell_a), end: Rc::clone(out_cell_b) };
+    //
+    //                     // Making sure that the two outline points aren't right next to each other
+    //                     if hypotenuse.get_mag() >= out_dist_a.get_mag() && hypotenuse.get_mag() >= out_dist_b.get_mag() {
+    //                         return result;
+    //                     }
+    //                 }
+    //             }
+    //             None
+    //         };
+    //
+    //         let (min_out_cell_a, min_out_dist_a) = &dists[0];
+    //         let (x_dist, y_dist) = min_out_dist_a.get_dists();
+    //         'outer: for x_offset in -1..2 {
+    //             for y_offset in -1..2 {
+    //                 let targets = vec![
+    //                     (in_cell.get_pos().0 + (x_dist + x_offset), in_cell.get_pos().1 + (y_dist + y_offset)),
+    //                     // (in_cell.get_pos().0 + (-x_dist + x_offset), in_cell.get_pos().1 + (y_dist + y_offset)),
+    //                     // (in_cell.get_pos().0 + (x_dist + x_offset), in_cell.get_pos().1 + (-y_dist + y_offset)),
+    //                 ];
+    //
+    //                 let result = find_sorrounding(min_out_cell_a, min_out_dist_a, targets);
+    //
+    //                 if let Some((min_out_cell_b, min_out_dist_b)) = result {
+    //                     println!("Cell A: {}, Cell B (target): {}", min_out_cell_a, min_out_cell_b);
+    //
+    //
+    //                     // println!("Before length: {}", in_cell_dists.len());
+    //                     self.erase_in_cells(&mut in_cell_dists, Rc::clone(in_cell), Rc::clone(&min_out_cell_a));
+    //                     self.erase_in_cells(&mut in_cell_dists, Rc::clone(in_cell), Rc::clone(&min_out_cell_b));
+    //                     // println!("After length: {}", in_cell_dists.len());
+    //
+    //                     skeleton.push(Rc::clone(&in_cell));
+    //                     skeleton.push(Rc::clone(&min_out_cell_a));
+    //                     skeleton.push(Rc::clone(&min_out_cell_b));
+    //                     break 'outer;
+    //                 }
+    //             }
+    //         }
+    //         
+    //         // Find and remove element to not be reused
+    //         if let Some(index) = in_cell_dists.iter().position(|(cell, _)| *cell == Rc::clone(in_cell)) {
+    //             // Remove interior and in_cell_dists because in_ceLl_dists is being accessed
+    //             // inside this loop
+    //             // interior.remove(index);
+    //             in_cell_dists.remove(index);
+    //         }
+    //
+    //         count += 1;
+    //     }
+    //
+    //     // for i in &skeleton {
+    //     //     println!("{}, {}", i.get_pos().0, i.get_pos().1);
+    //     // }
+    //
+    //     self.skeleton = skeleton;
+    // }
+    //
+    // fn connect_corners(&mut self, skeleton: &mut Vec<CellRef>) {
+    //     // skeleton
+    //     //     .iter()
+    //     //     .filter(|cell| self.grid.get_adjacent(cell).len() == 1)
+    //     //     .collect();
+    // }
+    //
+    //
+    // // Brensenham's Line algorithm
+    // fn erase_in_cells(&mut self, in_cell_dists: &mut Vec<(CellRef, Dist)>, c1: CellRef, c2: CellRef) {
+    //     let mut remove_in_cell = |x, y| {
+    //         // Biggest hault
+    //         let half_thickness = (1.0 / 2.0) as isize;
+    //         for dx in -half_thickness..=half_thickness {
+    //             for dy in -half_thickness..=half_thickness {
+    //                 if dx * dx + dy * dy <= half_thickness * half_thickness {
+    //                     if let Some(index) = in_cell_dists.iter().position(|(cell, _)| cell.get_pos() == (x + dx as i32, y + dy as i32)) {
+    //                         // self.skeleton.push(Rc::clone(&in_cell_dists[index].0));
+    //                         in_cell_dists.remove(index);
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //     };
+    //
+    //     let (x1, y1) = c1.get_pos();
+    //     let (x2, y2) = c2.get_pos();
+    //
+    //     let dx = (x2 - x1).abs();
+    //     let dy = (y2 - y1).abs();
+    //     let (mut x, mut y) = (x1, y1);
+    //     let sx = if x1 < x2 { 1 } else { -1 };
+    //     let sy = if y1 < y2 { 1 } else { -1 };
+    //
+    //     if dx > dy {
+    //         let mut err = dx / 2;
+    //         while x != x2 {
+    //             remove_in_cell(x, y);
+    //             err -= dy;
+    //             if err < 0 {
+    //                 y += sy;
+    //                 err += dx;
+    //             }
+    //             x += sx;
+    //         }
+    //     } else {
+    //         let mut err = dy / 2;
+    //         while y != y2 {
+    //             remove_in_cell(x, y);
+    //             // points.push((x, y));
+    //             err -= dx;
+    //             if err < 0 {
+    //                 x += sx;
+    //                 err += dy;
+    //             }
+    //             y += sy;
+    //         }
+    //     }
+    //
+    //     remove_in_cell(x, y);
+    // }
 
     pub fn print(&self) {
         self.grid.print();
     }
 
-    pub fn print_outline(&self) {
-        self.grid.print_vertices(&self.outline);
-    }
-
-    pub fn print_skeleton(&self) {
-        self.grid.print_vertices(&self.skeleton);
-    }
+    // pub fn print_outline(&self) {
+    //     self.grid.print_vertices(&self.outline);
+    // }
+    //
+    // pub fn print_skeleton(&self) {
+    //     self.grid.print_vertices(&self.skeleton);
+    // }
 }
 
 #[derive(Eq, Clone)]
@@ -390,12 +526,12 @@ pub struct Dist {
 
 impl Dist {
     pub fn get_legs(&self) -> (u32, u32) {
-        let x_leg = (self.start.x - self.end.x).abs();
-        let y_leg = (self.start.y - self.end.y).abs();
+        let x_leg = (self.start.x as i32 - self.end.x as i32).abs();
+        let y_leg = (self.start.y as i32 - self.end.y as i32).abs();
         (x_leg as u32, y_leg as u32)
     }
 
-    pub fn get_dists(&self) -> (i32, i32) {
+    pub fn get_dists(&self) -> (u32, u32) {
         let x_dist = self.start.x - self.end.x;
         let y_dist = self.start.y - self.end.y;
         (x_dist, y_dist)
@@ -466,6 +602,7 @@ impl PartialEq for Dist {
 }
 
 
+#[derive(Eq, PartialEq, Clone)]
 pub struct Grid {
     dim: (u32, u32),
     cells: Vec<Vec<Option<CellRef>>>,
@@ -490,7 +627,7 @@ impl Grid {
             for col in 0..width {
                 let cell = match str_grid_fmt.chars().nth((row * width + col) as usize).unwrap() {
                     // '#' => Some(Rc::new(RefCell::new(Cell { x: row as i32, y: col as i32 }))),
-                    '#' => Some(Rc::new(Cell { x: row as i32, y: col as i32 })),
+                    '#' => Some(Rc::new(Cell { x: row as u32, y: col as u32 })),
                     '.' => None,
                     c => panic!("Invalid symbol {}", c),
                 };
@@ -502,7 +639,7 @@ impl Grid {
 
     pub fn set_cell(&mut self, row: u32, col: u32, some: bool) {
         let cell_opt = if some {
-            Some(Rc::new(Cell { x: row as i32, y: col as i32 }))
+            Some(Rc::new(Cell { x: row as u32, y: col as u32 }))
         } else {
             None
         };
@@ -548,7 +685,7 @@ impl Grid {
     pub fn print_vertices(&self, vertices: &Vec<CellRef>) {
         let (height, width) = self.dim;
 
-        let find = |x: i32, y: i32| {
+        let find = |x: u32, y: u32| {
             for v in vertices {
                 if v.get_pos() == (x, y) {
                     return true;
@@ -559,7 +696,7 @@ impl Grid {
 
         for row in 0..height {
             for col in 0..width {
-                if find(row as i32, col as i32) {
+                if find(row as u32, col as u32) {
                     print!("#");
                 } else {
                     print!(".");
@@ -585,7 +722,61 @@ impl Grid {
 
     }
 
-    pub fn get_adjacent(&self, cell: &Cell) -> Vec<CellRef> {
+    pub fn get_adjacent(&self, cell: &Cell) -> Vec<Option<CellRef>> {
+        let mut adjacent: Vec<Option<CellRef>> = Vec::new();
+        let (x, y) = cell.get_pos();
+
+        for row_offset in -1..=1 {
+            for col_offset in -1..=1 {
+                // Adjecent not including the element itself
+                // if row_offset == 0 && col_offset == 0 {
+                //     continue;
+                // }
+
+                let row = x as i32 + row_offset;
+                let col = y as i32 + col_offset;
+
+                // Out of bounds
+                if row < 0 || col < 0 {
+                    continue;
+                }
+
+                let (row, col) = (row as usize, col as usize);
+
+                // Out of bounds
+                if row as u32 >= self.dim.0 || col as u32 >= self.dim.1 {
+                    adjacent.push(None);
+                }
+
+                adjacent.push(self.at(row as u32, col as u32));
+                // if let Some(taken_cell) = self.at(row as u32, col as u32) {
+                //     adjacent.push(taken_cell);
+                // }
+            }
+        }
+
+        adjacent
+    }
+
+    pub fn get_transitions(&self, cell: &Cell) -> u8 {
+        // let adjacent = self.get_adjacent(cell);
+        let mut none_to_sum_n = 0;
+        let mut curr_some = true; // cell must be some
+        let (x, y) = cell.get_pos();
+
+        let circular_adjacent = vec![(0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1), (-1, 0), (-1, 1), (0, 1)];
+        for (x_offset, y_offset) in circular_adjacent {
+            let cell = self.at((x as i32 + x_offset) as u32, (y as i32 + y_offset) as u32);
+            if !curr_some && cell.is_some() {
+                none_to_sum_n += 1;
+            }
+            curr_some = cell.is_some();
+        }
+
+        none_to_sum_n
+    }
+
+    pub fn get_adjacent_cross(&self, cell: &Cell) -> Vec<CellRef> {
         let mut adjacent: Vec<CellRef> = Vec::new();
         let (x, y) = cell.get_pos();
 
@@ -597,8 +788,8 @@ impl Grid {
                     continue;
                 }
 
-                let row = x + row_offset;
-                let col = y + col_offset;
+                let row = x as i32 + row_offset;
+                let col = y as i32 + col_offset;
 
                 // Out of bounds
                 if row < 0 || col < 0 {
@@ -624,18 +815,18 @@ impl Grid {
 
 #[derive(Eq, PartialEq, Debug, Copy, Clone)]
 pub struct Cell {
-    x: i32,
-    y: i32,
+    x: u32,
+    y: u32,
 }
 
 impl Cell {
-    pub fn get_pos(&self) -> (i32, i32) {
+    pub fn get_pos(&self) -> (u32, u32) {
         (self.x, self.y)
     }
 
     pub fn dist(&self, other: CellRef) -> f64 {
-        let x_len = (self.x - other.x).abs();
-        let y_len = (self.y - other.y).abs();
+        let x_len = (self.x as i32 - other.x as i32).abs();
+        let y_len = (self.y as i32 - other.y as i32).abs();
         ((x_len.pow(2) + y_len.pow(2)) as f64).sqrt()
     }
 }

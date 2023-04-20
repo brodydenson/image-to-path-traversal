@@ -30,6 +30,7 @@
 
 use EthanCoop::*;
 
+
 fn main() {
     // let dim = (16, 16);
     // let grid_str = "
@@ -53,8 +54,9 @@ fn main() {
     // ";
 
     // For connecting points, find the shortest path that is farthest from all outer cells
-
+    // Next point that is most in the center, then apply A* path finding
+    //
     let mut canvas = Canvas::new();
-    canvas.build_from_img("G.png");
+    canvas.build_from_img("I.png");
     canvas.save();
 }
