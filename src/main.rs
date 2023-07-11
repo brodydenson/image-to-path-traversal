@@ -1,35 +1,4 @@
-// Storing Characters
-// X: Timeline
-// Y: X coordinates of character
-// Z: Y coordinates of character
-//
-// ......
-// ......
-// ......
-// ......
-// ......
-//
-// Input:
-// ..##@.
-// .#....
-// ..##..
-// ....#.
-// .###..
-//
-// ...1x0
-// ...000
-// ......
-// ......
-// ......
-//
-// ...x1.
-// ......
-// ......
-// ......
-// ......
-
 use EthanCoop::*;
-
 
 fn main() {
     // let dim = (16, 16);
@@ -57,6 +26,6 @@ fn main() {
     // Next point that is most in the center, then apply A* path finding
     //
     let mut canvas = Canvas::new();
-    canvas.build_from_img("I.png");
+    canvas.build_from_img("resources/Art1.png");
     canvas.save();
 }
